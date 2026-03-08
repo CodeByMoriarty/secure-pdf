@@ -1,0 +1,66 @@
+{
+  "name": "secure-pdf",
+  "version": "1.0.0",
+  "description": "Production-grade secure PDF generation with encryption, watermarking, tamper detection, expiration, forensic tracking, and QR verification.",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.js",
+      "types": "./src/types/index.d.ts"
+    }
+  },
+  "files": [
+    "src/",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --forceExit",
+    "test:coverage": "node --experimental-vm-modules node_modules/.bin/jest --coverage --forceExit",
+    "example:basic": "node examples/basic-usage.js",
+    "example:advanced": "node examples/advanced-security.js",
+    "example:enterprise": "node examples/enterprise-document.js",
+    "prepublishOnly": "npm test"
+  },
+  "keywords": [
+    "pdf",
+    "secure",
+    "encrypt",
+    "watermark",
+    "password-protection",
+    "tamper-detection",
+    "qr-code",
+    "pdfkit",
+    "forensic",
+    "document-security",
+    "self-destruct",
+    "view-tracking",
+    "confidential",
+    "permissions"
+  ],
+  "author": "CodeByMoriarty <alacambradev@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CodeByMoriarty/secure-pdf.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CodeByMoriarty/secure-pdf/issues"
+  },
+  "homepage": "https://github.com/CodeByMoriarty/secure-pdf#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "pdfkit": "^0.16.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "@jest/globals": "^29.7.0"
+  }
+}

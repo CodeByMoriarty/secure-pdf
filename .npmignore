@@ -1,0 +1,7 @@
+tests/
+examples/
+coverage/
+.gitignore
+jest.config.js
+tsconfig.json
+*.pdf

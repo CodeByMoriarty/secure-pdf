@@ -65,12 +65,15 @@ pdf
   .addText('Quarterly Report', { fontSize: 28, bold: true })
   .moveDown(1)
   .addText('Revenue exceeded targets across all business units.')
-  .addTable([
-    ['Region', 'Revenue', 'Growth'],
-    ['North America', '$42M', '+18%'],
-    ['Europe', '$28M', '+12%'],
-    ['APAC', '$15M', '+31%'],
-  ])
+  .addTable(
+    [
+      ['Region', 'Revenue', 'Growth'],
+      ['North America', '$42M', '+18%'],
+      ['Europe', '$28M', '+12%'],
+      ['APAC', '$15M', '+31%'],
+    ],
+    { headerBackground: '#1a1a2e', headerColor: '#ffffff' }
+  )
   .watermark('CONFIDENTIAL')
   .encrypt('report-2026')
   .permissions({ copying: false, modifying: false })
@@ -159,14 +162,139 @@ pdf
 const result = await pdf.save('enterprise-report.pdf');
 console.log(`Hash: ${result.contentHash}`);
 console.log(`Tracking: ${result.trackingId}`);
+console.log(`Document ID: ${result.documentId}`);
 ```
 
 ### Get Buffer (No File)
 
 ```javascript
-const { buffer, contentHash } = await pdf.toBuffer();
+const { buffer, contentHash, trackingId, documentId } = await pdf.toBuffer();
 // Use for HTTP responses, S3 uploads, email attachments, etc.
 ```
+
+---
+
+## Database Integration
+
+`secure-pdf` does not connect to databases itself — you query your database first, then pass the data into the PDF builder. This makes it compatible with any Node.js database client (PostgreSQL, MySQL, MongoDB, SQLite, etc.).
+
+### Basic Pattern
+
+```javascript
+import { SecurePDF } from 'secure-pdf';
+import pg from 'pg';
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+
+// 1. Fetch data from the database
+const { rows } = await pool.query(
+  'SELECT name, department, salary FROM employees ORDER BY department'
+);
+
+// 2. Build PDF from the query results
+const pdf = new SecurePDF();
+
+pdf
+  .addText('Employee Report', { fontSize: 24, bold: true })
+  .moveDown(1)
+  .addText(`Generated: ${new Date().toLocaleDateString()}`, { fontSize: 11, color: '#888888' })
+  .moveDown(1)
+  .addTable([
+    ['Name', 'Department', 'Salary'],
+    ...rows.map(r => [r.name, r.department, `$${r.salary.toLocaleString()}`]),
+  ])
+  .watermark('CONFIDENTIAL')
+  .encrypt('hr-password-2026')
+  .permissions({ copying: false, modifying: false })
+  .metadata({
+    title: 'Employee Report',
+    author: 'HR System',
+    classification: 'INTERNAL',
+  });
+
+// 3. Return as buffer (ideal for HTTP APIs) or save to disk
+const { buffer } = await pdf.toBuffer();
+```
+
+### Sending a PDF as an HTTP Response
+
+```javascript
+import express from 'express';
+import { SecurePDF } from 'secure-pdf';
+import pg from 'pg';
+
+const app = express();
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+
+app.get('/reports/invoices/:id', async (req, res) => {
+  const { rows } = await pool.query(
+    'SELECT * FROM invoice_items WHERE invoice_id = $1',
+    [req.params.id]
+  );
+
+  if (!rows.length) return res.status(404).send('Invoice not found');
+
+  const pdf = new SecurePDF();
+
+  pdf
+    .addText(`Invoice #${req.params.id}`, { fontSize: 26, bold: true })
+    .moveDown(1)
+    .addTable([
+      ['Item', 'Qty', 'Unit Price', 'Total'],
+      ...rows.map(r => [r.description, String(r.qty), `$${r.unit_price}`, `$${r.total}`]),
+    ])
+    .metadata({ title: `Invoice #${req.params.id}`, author: 'Billing System' })
+    .encrypt('invoice-2026');
+
+  const { buffer } = await pdf.toBuffer();
+
+  res.set({
+    'Content-Type': 'application/pdf',
+    'Content-Disposition': `attachment; filename="invoice-${req.params.id}.pdf"`,
+    'Content-Length': buffer.length,
+  });
+  res.send(buffer);
+});
+```
+
+### Per-User Document Tracking with a Database
+
+Combine `.track()` and `.forensicWatermark()` with a DB-stored user ID to trace distributed documents back to the recipient:
+
+```javascript
+const user = await db.query('SELECT id, name, email FROM users WHERE id = $1', [userId]);
+const recipient = user.rows[0];
+
+const pdf = new SecurePDF();
+
+pdf
+  .addText(`Welcome, ${recipient.name}`, { fontSize: 20, bold: true })
+  .addText('This document is personalized and tracked.', { fontSize: 12 })
+  .track(`USER-${recipient.id}`)
+  .forensicWatermark({ userId: recipient.email, timestamp: true })
+  .encrypt('access-password')
+  .tamperDetect(true);
+
+const { buffer, trackingId } = await pdf.toBuffer();
+
+// Optionally store the tracking ID back in the database
+await db.query(
+  'INSERT INTO document_log (user_id, tracking_id, issued_at) VALUES ($1, $2, NOW())',
+  [recipient.id, trackingId]
+);
+```
+
+### Supported Database Clients
+
+`secure-pdf` works with any async data source. Common pairings:
+
+| Database    | Client              |
+|-------------|---------------------|
+| PostgreSQL  | `pg`, `postgres`    |
+| MySQL       | `mysql2`            |
+| SQLite      | `better-sqlite3`    |
+| MongoDB     | `mongodb`, `mongoose` |
+| Any ORM     | `prisma`, `drizzle`, `sequelize` |
 
 ---
 
@@ -184,6 +312,12 @@ new SecurePDF(options?)
 | `pageSize` | `string` | `'A4'` | Page size (`'A4'`, `'Letter'`, etc.) |
 | `margins` | `object` | `{ top: 50, bottom: 50, left: 50, right: 50 }` | Page margins in points |
 
+### Instance Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `documentId` | `string` | The unique identifier for this document instance |
+
 ### Content Methods
 
 All content methods return `this` for chaining.
@@ -191,10 +325,10 @@ All content methods return `this` for chaining.
 | Method | Parameters | Description |
 |---|---|---|
 | `addText(text, options?)` | `text: string`, `options: TextOptions` | Add a text block |
-| `addPage(options?)` | `options: object` | Insert page break |
-| `addImage(source, options?)` | `source: string \| Buffer`, `options: ImageOptions` | Embed image |
-| `addTable(rows, options?)` | `rows: string[][]`, `options: TableOptions` | Render table (first row = header) |
-| `setFont(name, path)` | `name: string`, `path: string` | Register and use custom font |
+| `addPage(options?)` | `options: object` | Insert a page break |
+| `addImage(source, options?)` | `source: string \| Buffer`, `options: ImageOptions` | Embed an image |
+| `addTable(rows, options?)` | `rows: string[][]`, `options: TableOptions` | Render a table (first row = header) |
+| `setFont(name, path)` | `name: string`, `path: string` | Register and use a custom font |
 | `moveDown(lines?)` | `lines: number` | Add vertical spacing |
 
 #### TextOptions
@@ -209,6 +343,32 @@ All content methods return `this` for chaining.
 | `align` | `'left' \| 'center' \| 'right' \| 'justify'` | Text alignment |
 | `font` | `string` | Font name override |
 | `link` | `string` | Hyperlink URL |
+| `width` | `number` | Maximum width for text wrapping (points) |
+| `lineBreak` | `boolean` | Enable or disable automatic line breaks |
+| `indent` | `number` | Left indent in points |
+
+#### ImageOptions
+
+| Property | Type | Description |
+|---|---|---|
+| `x` | `number` | Absolute x position |
+| `y` | `number` | Absolute y position |
+| `width` | `number` | Image width in points |
+| `height` | `number` | Image height in points |
+| `fit` | `[number, number]` | Fit image within `[width, height]` bounds |
+| `align` | `'left' \| 'center' \| 'right'` | Horizontal alignment |
+| `valign` | `'top' \| 'center' \| 'bottom'` | Vertical alignment |
+
+#### TableOptions
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `fontSize` | `number` | `10` | Font size for all cells |
+| `columnWidth` | `number` | auto (equal split) | Fixed width per column in points |
+| `headerBackground` | `string` | `'#eeeeee'` | Header row background color (hex) |
+| `headerColor` | `string` | `'#333333'` | Header row text color (hex) |
+| `cellColor` | `string` | `'#000000'` | Body cell text color (hex) |
+| `borderColor` | `string` | `'#cccccc'` | Cell border color (hex) |
 
 ### Security Methods
 
@@ -228,13 +388,26 @@ All content methods return `this` for chaining.
 
 | Property | Type | Values |
 |---|---|---|
-| `printing` | `string \| boolean` | `'highResolution'`, `'lowResolution'`, `false` |
+| `printing` | `string \| boolean` | `'highResolution'`, `'lowResolution'`, `true`, `false` |
 | `modifying` | `boolean` | Allow content modification |
 | `copying` | `boolean` | Allow content copying |
 | `annotating` | `boolean` | Allow annotations |
 | `fillingForms` | `boolean` | Allow form filling |
 | `contentAccessibility` | `boolean` | Allow accessibility extraction |
 | `documentAssembly` | `boolean` | Allow page assembly |
+
+#### MetadataConfig
+
+| Property | Type | Description |
+|---|---|---|
+| `title` | `string` | Document title |
+| `author` | `string` | Document author |
+| `subject` | `string` | Document subject |
+| `keywords` | `string \| string[]` | Search keywords |
+| `creator` | `string` | Creating application name |
+| `producer` | `string` | PDF producer name |
+| `company` | `string` | Organization name |
+| `classification` | `string` | Security classification label |
 
 #### WatermarkOptions
 
@@ -245,6 +418,21 @@ All content methods return `this` for chaining.
 | `opacity` | `number` | `0.15` | Opacity (0–1) |
 | `angle` | `number` | `-45` | Rotation in degrees |
 | `font` | `string` | `'Helvetica'` | Font name |
+
+#### QROptions
+
+| Property | Type | Description |
+|---|---|---|
+| `x` | `number` | Absolute x position of the QR code |
+| `y` | `number` | Absolute y position of the QR code |
+| `size` | `number` | QR code size in points |
+
+#### ForensicConfig
+
+| Property | Type | Description |
+|---|---|---|
+| `userId` | `string` | User identifier to embed in forensic pattern |
+| `timestamp` | `boolean` | Include generation timestamp in pattern |
 
 ### Output Methods
 
@@ -262,6 +450,17 @@ All content methods return `this` for chaining.
   documentId: string;    // Document identifier
   contentHash: string;   // SHA-256 hash (if tamperDetect enabled)
   trackingId: string;    // Tracking ID (if track enabled)
+}
+```
+
+#### BufferResult
+
+```typescript
+{
+  buffer: Buffer;        // Raw PDF bytes
+  contentHash: string;   // SHA-256 hash (if tamperDetect enabled)
+  trackingId: string;    // Tracking ID (if track enabled)
+  documentId: string;    // Document identifier
 }
 ```
 
@@ -316,12 +515,89 @@ A QR code is embedded on the last page that encodes the verification URL with th
 
 ---
 
+## Error Handling
+
+`secure-pdf` exports structured error classes for precise error handling:
+
+```javascript
+import {
+  SecurePDFError,
+  ValidationError,
+  EncryptionError,
+  BuildError,
+  FeatureError,
+} from 'secure-pdf';
+
+try {
+  await pdf.save('output.pdf');
+} catch (err) {
+  if (err instanceof ValidationError) {
+    console.error(`Invalid input on field "${err.field}": ${err.message}`);
+  } else if (err instanceof BuildError) {
+    console.error(`PDF generation failed: ${err.message}`);
+  } else if (err instanceof EncryptionError) {
+    console.error(`Encryption error: ${err.message}`);
+  } else {
+    throw err;
+  }
+}
+```
+
+### Error Classes
+
+| Class | Code | Description |
+|---|---|---|
+| `SecurePDFError` | base | Base class for all package errors |
+| `ValidationError` | — | Invalid input; includes `field` property |
+| `EncryptionError` | — | Encryption configuration failure |
+| `BuildError` | — | PDF generation or rendering failure |
+| `FeatureError` | — | Feature-specific failure; includes `feature` property |
+
+---
+
+## Exported Utilities
+
+In addition to the main class, the package exports low-level utilities for advanced use:
+
+### Crypto Utilities
+
+```javascript
+import { sha256, sha256Multi, hmacSha256, generateDocumentId } from 'secure-pdf';
+
+sha256('some data');                        // → hex string
+sha256Multi(['part1', 'part2'], 'salt');    // → hex string
+hmacSha256('secret-key', 'data');          // → hex string
+generateDocumentId();                       // → unique document ID string
+```
+
+### Feature Functions
+
+```javascript
+import {
+  verifyContentHash,
+  applyEncryption,
+  buildPermissionFlags,
+  renderWatermark,
+  applyMetadata,
+  applyExpiration,
+  embedTracking,
+  renderForensicWatermark,
+  renderQRVerification,
+  computeContentHash,
+  embedContentHash,
+} from 'secure-pdf';
+```
+
+These are exported for advanced integrations or custom PDF builders using `PDFBuilder` directly.
+
+---
+
 ## TypeScript
 
 The package includes complete type definitions. No additional `@types` package is needed.
 
 ```typescript
-import { SecurePDF, type SaveResult, type PermissionsConfig } from 'secure-pdf';
+import { SecurePDF, type SaveResult, type PermissionsConfig, type BufferResult } from 'secure-pdf';
 
 const perms: PermissionsConfig = {
   printing: 'lowResolution',
@@ -330,7 +606,9 @@ const perms: PermissionsConfig = {
 
 const pdf = new SecurePDF();
 pdf.addText('Typed document').permissions(perms);
+
 const result: SaveResult = await pdf.save('typed.pdf');
+const { buffer }: BufferResult = await pdf.toBuffer();
 ```
 
 ---

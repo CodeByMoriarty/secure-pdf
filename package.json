@@ -1,6 +1,6 @@
 {
   "name": "secure-pdf",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Production-grade secure PDF generation with encryption, watermarking, tamper detection, expiration, forensic tracking, and QR verification.",
   "type": "module",
   "main": "./src/index.js",

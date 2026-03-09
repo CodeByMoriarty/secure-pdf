@@ -176,9 +176,17 @@ const { buffer, contentHash, trackingId, documentId } = await pdf.toBuffer();
 
 ## Database Integration
 
-`secure-pdf` does not connect to databases itself — you query your database first, then pass the data into the PDF builder. This makes it compatible with any Node.js database client (PostgreSQL, MySQL, MongoDB, SQLite, etc.).
+`secure-pdf` does not connect to databases itself — you query your database first, then pass the data into the PDF builder. The core pattern is always the same regardless of which database you use:
 
-### Basic Pattern
+```
+Query DB  →  Map results to string[][]  →  Pass to .addTable()
+```
+
+The `secure-pdf` code is **identical across all databases** — only the query syntax changes.
+
+---
+
+### PostgreSQL (`pg`)
 
 ```javascript
 import { SecurePDF } from 'secure-pdf';
@@ -186,12 +194,12 @@ import pg from 'pg';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
-// 1. Fetch data from the database
+// 1. Fetch rows from PostgreSQL
 const { rows } = await pool.query(
   'SELECT name, department, salary FROM employees ORDER BY department'
 );
 
-// 2. Build PDF from the query results
+// 2. Build the PDF — same for every database
 const pdf = new SecurePDF();
 
 pdf
@@ -206,31 +214,213 @@ pdf
   .watermark('CONFIDENTIAL')
   .encrypt('hr-password-2026')
   .permissions({ copying: false, modifying: false })
-  .metadata({
-    title: 'Employee Report',
-    author: 'HR System',
-    classification: 'INTERNAL',
-  });
+  .metadata({ title: 'Employee Report', author: 'HR System', classification: 'INTERNAL' });
 
-// 3. Return as buffer (ideal for HTTP APIs) or save to disk
 const { buffer } = await pdf.toBuffer();
 ```
 
+---
+
+### MySQL (`mysql2`)
+
+```javascript
+import { SecurePDF } from 'secure-pdf';
+import mysql from 'mysql2/promise';
+
+const pool = mysql.createPool({ host: 'localhost', user: 'root', database: 'mydb' });
+
+// 1. Fetch rows from MySQL
+const [rows] = await pool.query(
+  'SELECT name, department, salary FROM employees ORDER BY department'
+);
+
+// 2. Build the PDF — same for every database
+const pdf = new SecurePDF();
+
+pdf
+  .addText('Employee Report', { fontSize: 24, bold: true })
+  .moveDown(1)
+  .addText(`Generated: ${new Date().toLocaleDateString()}`, { fontSize: 11, color: '#888888' })
+  .moveDown(1)
+  .addTable([
+    ['Name', 'Department', 'Salary'],
+    ...rows.map(r => [r.name, r.department, `$${r.salary.toLocaleString()}`]),
+  ])
+  .watermark('CONFIDENTIAL')
+  .encrypt('hr-password-2026')
+  .permissions({ copying: false, modifying: false })
+  .metadata({ title: 'Employee Report', author: 'HR System', classification: 'INTERNAL' });
+
+const { buffer } = await pdf.toBuffer();
+```
+
+---
+
+### SQLite (`better-sqlite3`)
+
+```javascript
+import { SecurePDF } from 'secure-pdf';
+import Database from 'better-sqlite3';
+
+const db = new Database('mydb.sqlite');
+
+// 1. Fetch rows from SQLite (synchronous)
+const rows = db.prepare(
+  'SELECT name, department, salary FROM employees ORDER BY department'
+).all();
+
+// 2. Build the PDF — same for every database
+const pdf = new SecurePDF();
+
+pdf
+  .addText('Employee Report', { fontSize: 24, bold: true })
+  .moveDown(1)
+  .addText(`Generated: ${new Date().toLocaleDateString()}`, { fontSize: 11, color: '#888888' })
+  .moveDown(1)
+  .addTable([
+    ['Name', 'Department', 'Salary'],
+    ...rows.map(r => [r.name, r.department, `$${r.salary.toLocaleString()}`]),
+  ])
+  .watermark('CONFIDENTIAL')
+  .encrypt('hr-password-2026')
+  .permissions({ copying: false, modifying: false })
+  .metadata({ title: 'Employee Report', author: 'HR System', classification: 'INTERNAL' });
+
+const { buffer } = await pdf.toBuffer();
+```
+
+---
+
+### MongoDB (`mongodb`)
+
+```javascript
+import { SecurePDF } from 'secure-pdf';
+import { MongoClient } from 'mongodb';
+
+const client = new MongoClient(process.env.MONGO_URI);
+await client.connect();
+const db = client.db('mydb');
+
+// 1. Fetch documents from MongoDB
+const employees = await db.collection('employees')
+  .find({})
+  .sort({ department: 1 })
+  .toArray();
+
+// 2. Build the PDF — same for every database
+const pdf = new SecurePDF();
+
+pdf
+  .addText('Employee Report', { fontSize: 24, bold: true })
+  .moveDown(1)
+  .addText(`Generated: ${new Date().toLocaleDateString()}`, { fontSize: 11, color: '#888888' })
+  .moveDown(1)
+  .addTable([
+    ['Name', 'Department', 'Salary'],
+    ...employees.map(e => [e.name, e.department, `$${e.salary.toLocaleString()}`]),
+  ])
+  .watermark('CONFIDENTIAL')
+  .encrypt('hr-password-2026')
+  .permissions({ copying: false, modifying: false })
+  .metadata({ title: 'Employee Report', author: 'HR System', classification: 'INTERNAL' });
+
+const { buffer } = await pdf.toBuffer();
+```
+
+> **Note:** MongoDB returns plain objects (documents), not rows. Access fields directly — `e.name`, `e.department`. For nested fields use dot access: `e.address.city`. Use `e._id.toString()` when passing to `.track()`.
+
+---
+
+### Mongoose
+
+```javascript
+import { SecurePDF } from 'secure-pdf';
+import mongoose from 'mongoose';
+
+await mongoose.connect(process.env.MONGO_URI);
+
+const Employee = mongoose.model('Employee', new mongoose.Schema({
+  name: String,
+  department: String,
+  salary: Number,
+}));
+
+// 1. Fetch documents using Mongoose
+const employees = await Employee.find().sort({ department: 1 }).lean();
+
+// 2. Build the PDF — same for every database
+const pdf = new SecurePDF();
+
+pdf
+  .addText('Employee Report', { fontSize: 24, bold: true })
+  .moveDown(1)
+  .addText(`Generated: ${new Date().toLocaleDateString()}`, { fontSize: 11, color: '#888888' })
+  .moveDown(1)
+  .addTable([
+    ['Name', 'Department', 'Salary'],
+    ...employees.map(e => [e.name, e.department, `$${e.salary.toLocaleString()}`]),
+  ])
+  .watermark('CONFIDENTIAL')
+  .encrypt('hr-password-2026')
+  .permissions({ copying: false, modifying: false })
+  .metadata({ title: 'Employee Report', author: 'HR System', classification: 'INTERNAL' });
+
+const { buffer } = await pdf.toBuffer();
+```
+
+> **Tip:** Use `.lean()` on Mongoose queries to get plain JavaScript objects instead of Mongoose documents — this makes field access faster and more predictable.
+
+---
+
+### Prisma
+
+```javascript
+import { SecurePDF } from 'secure-pdf';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+// 1. Fetch records using Prisma
+const employees = await prisma.employee.findMany({
+  orderBy: { department: 'asc' },
+  select: { name: true, department: true, salary: true },
+});
+
+// 2. Build the PDF — same for every database
+const pdf = new SecurePDF();
+
+pdf
+  .addText('Employee Report', { fontSize: 24, bold: true })
+  .moveDown(1)
+  .addText(`Generated: ${new Date().toLocaleDateString()}`, { fontSize: 11, color: '#888888' })
+  .moveDown(1)
+  .addTable([
+    ['Name', 'Department', 'Salary'],
+    ...employees.map(e => [e.name, e.department, `$${e.salary.toLocaleString()}`]),
+  ])
+  .watermark('CONFIDENTIAL')
+  .encrypt('hr-password-2026')
+  .permissions({ copying: false, modifying: false })
+  .metadata({ title: 'Employee Report', author: 'HR System', classification: 'INTERNAL' });
+
+const { buffer } = await pdf.toBuffer();
+```
+
+---
+
 ### Sending a PDF as an HTTP Response
+
+This pattern works with any of the database clients above — just swap the query section:
 
 ```javascript
 import express from 'express';
 import { SecurePDF } from 'secure-pdf';
-import pg from 'pg';
 
 const app = express();
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
 app.get('/reports/invoices/:id', async (req, res) => {
-  const { rows } = await pool.query(
-    'SELECT * FROM invoice_items WHERE invoice_id = $1',
-    [req.params.id]
-  );
+  // Swap this block for whichever DB client you use
+  const rows = await yourDb.getInvoiceItems(req.params.id);
 
   if (!rows.length) return res.status(404).send('Invoice not found');
 
@@ -257,44 +447,45 @@ app.get('/reports/invoices/:id', async (req, res) => {
 });
 ```
 
-### Per-User Document Tracking with a Database
+---
 
-Combine `.track()` and `.forensicWatermark()` with a DB-stored user ID to trace distributed documents back to the recipient:
+### Per-User Document Tracking
+
+Combine `.track()` and `.forensicWatermark()` with a DB-stored user ID to trace distributed documents back to their recipient. Works with any database — just fetch the user record first:
 
 ```javascript
-const user = await db.query('SELECT id, name, email FROM users WHERE id = $1', [userId]);
-const recipient = user.rows[0];
+// PostgreSQL / MySQL / SQLite: recipient = user.rows[0] or rows[0]
+// MongoDB / Mongoose: recipient = await User.findById(userId).lean()
+// Prisma: recipient = await prisma.user.findUnique({ where: { id: userId } })
 
 const pdf = new SecurePDF();
 
 pdf
   .addText(`Welcome, ${recipient.name}`, { fontSize: 20, bold: true })
   .addText('This document is personalized and tracked.', { fontSize: 12 })
-  .track(`USER-${recipient.id}`)
+  .track(`USER-${recipient.id ?? recipient._id.toString()}`)
   .forensicWatermark({ userId: recipient.email, timestamp: true })
   .encrypt('access-password')
   .tamperDetect(true);
 
 const { buffer, trackingId } = await pdf.toBuffer();
 
-// Optionally store the tracking ID back in the database
-await db.query(
-  'INSERT INTO document_log (user_id, tracking_id, issued_at) VALUES ($1, $2, NOW())',
-  [recipient.id, trackingId]
-);
+// Optionally log the tracking ID back to the database
+// e.g. await db.query('INSERT INTO document_log ...') or
+//      await prisma.documentLog.create({ data: { userId, trackingId } })
 ```
+
+---
 
 ### Supported Database Clients
 
-`secure-pdf` works with any async data source. Common pairings:
-
-| Database    | Client              |
-|-------------|---------------------|
-| PostgreSQL  | `pg`, `postgres`    |
-| MySQL       | `mysql2`            |
-| SQLite      | `better-sqlite3`    |
-| MongoDB     | `mongodb`, `mongoose` |
-| Any ORM     | `prisma`, `drizzle`, `sequelize` |
+| Database   | Client                              |
+|------------|-------------------------------------|
+| PostgreSQL | `pg`, `postgres`                    |
+| MySQL      | `mysql2`                            |
+| SQLite     | `better-sqlite3`                    |
+| MongoDB    | `mongodb`, `mongoose`               |
+| Any ORM    | `prisma`, `drizzle`, `sequelize`    |
 
 ---
 
